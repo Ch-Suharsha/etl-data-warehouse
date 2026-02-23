@@ -1,0 +1,116 @@
+version: '3.8'
+services:
+  # SOURCE: PostgreSQL — Orders database
+  postgres_source:
+    image: postgres:15
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: ecommerce_orders
+      POSTGRES_USER: source_user
+      POSTGRES_PASSWORD: source_pass
+    volumes:
+      - pg_source_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U source_user -d ecommerce_orders"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # SOURCE: MySQL — Customer management
+  mysql_source:
+    image: mysql:8.0
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_DATABASE: customer_management
+      MYSQL_USER: source_user
+      MYSQL_PASSWORD: source_pass
+      MYSQL_ROOT_PASSWORD: root_pass
+    volumes:
+      - mysql_source_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # SOURCE: MongoDB — Product reviews
+  mongo_source:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_source_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # TARGET: PostgreSQL — Analytics warehouse
+  postgres_warehouse:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: analytics_warehouse
+      POSTGRES_USER: warehouse_user
+      POSTGRES_PASSWORD: warehouse_pass
+    volumes:
+      - warehouse_data:/var/lib/postgresql/data
+      - ./warehouse/target_schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U warehouse_user -d analytics_warehouse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Airflow webserver + scheduler
+  airflow:
+    image: apache/airflow:2.8.0
+    depends_on:
+      postgres_warehouse:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      # Pass DB connection info to Airflow tasks
+      PG_SOURCE_HOST: postgres_source
+      PG_SOURCE_PORT: "5432"
+      PG_SOURCE_DB: ecommerce_orders
+      PG_SOURCE_USER: source_user
+      PG_SOURCE_PASSWORD: source_pass
+      MYSQL_SOURCE_HOST: mysql_source
+      MYSQL_SOURCE_PORT: "3306"
+      MYSQL_SOURCE_DB: customer_management
+      MYSQL_SOURCE_USER: source_user
+      MYSQL_SOURCE_PASSWORD: source_pass
+      MONGO_SOURCE_HOST: mongo_source
+      MONGO_SOURCE_PORT: "27017"
+      MONGO_SOURCE_DB: product_reviews
+      WAREHOUSE_HOST: postgres_warehouse
+      WAREHOUSE_PORT: "5432"
+      WAREHOUSE_DB: analytics_warehouse
+      WAREHOUSE_USER: warehouse_user
+      WAREHOUSE_PASSWORD: warehouse_pass
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - airflow_logs:/opt/airflow/logs
+    command: >
+      bash -c "airflow db init &&
+      airflow users create --username admin --password admin
+      --firstname Admin --lastname User --role Admin
+      --email admin@example.com &&
+      airflow webserver & airflow scheduler"
+
+volumes:
+  pg_source_data:
+  mysql_source_data:
+  mongo_source_data:
+  warehouse_data:
+  airflow_logs:

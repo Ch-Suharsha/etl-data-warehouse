@@ -1,0 +1,19 @@
+sources:
+  postgres:
+    table: orders
+    records: 100000
+  mysql:
+    table: customers
+    records: 20000
+  mongodb:
+    collection: product_reviews
+    records: 80000
+
+warehouse:
+  schema: star_schema
+  target_records: 200000
+
+etl:
+  schedule: "0 6 * * *"  # Daily at 6 AM
+  batch_size: 10000
+  retry_count: 3

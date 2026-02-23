@@ -1,0 +1,14 @@
+name: 'etl_data_warehouse'
+version: '1.0.0'
+config-version: 2
+profile: 'warehouse'
+
+model-paths: ["models"]
+test-paths: ["tests"]
+
+models:
+  etl_data_warehouse:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

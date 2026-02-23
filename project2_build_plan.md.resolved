@@ -1,0 +1,896 @@
+# Project 2: Multi-Source Data Warehouse & ETL Platform
+
+## What This Project Is
+
+A data warehouse with star schema data models that brings together data from multiple sources (PostgreSQL, MySQL, MongoDB) into one analytics environment. It has automated ETL pipelines using Airflow DAGs for daily extraction, transformation, and loading, with dbt for data modeling and quality checks so that the warehouse stays consistent. Includes complex SQL with CTEs and window functions to track key metrics across 200K+ records and generate reporting dashboards.
+
+**GitHub Repo Name:** `etl-data-warehouse`
+**Owner:** `Ch-Suharsha`
+**Tech Stack:** Python, Apache Airflow, SQL, PostgreSQL, MongoDB, dbt, Docker
+
+---
+
+## Step-by-Step Build Plan
+
+### Phase 1: Repository Setup
+
+#### Step 1.1 — Create the GitHub repo
+```bash
+mkdir etl-data-warehouse
+cd etl-data-warehouse
+git init
+gh repo create Ch-Suharsha/etl-data-warehouse --public --description "Multi-source ETL data warehouse with Airflow, dbt, star schema design, and SQL analytics" --source . --remote origin
+```
+
+#### Step 1.2 — Create the project structure
+```
+etl-data-warehouse/
+├── README.md
+├── docker-compose.yml
+├── requirements.txt
+├── .gitignore
+├── .env.example
+├── source_databases/
+│   ├── __init__.py
+│   ├── postgres_source.py
+│   ├── mysql_source.py
+│   ├── mongo_source.py
+│   └── seed_data.py
+├── airflow/
+│   ├── dags/
+│   │   ├── etl_daily_pipeline.py
+│   │   └── data_quality_check.py
+│   └── plugins/
+│       └── __init__.py
+├── dbt_warehouse/
+│   ├── dbt_project.yml
+│   ├── profiles.yml
+│   ├── models/
+│   │   ├── staging/
+│   │   │   ├── stg_orders.sql
+│   │   │   ├── stg_customers.sql
+│   │   │   ├── stg_products.sql
+│   │   │   └── stg_reviews.sql
+│   │   ├── marts/
+│   │   │   ├── dim_customers.sql
+│   │   │   ├── dim_products.sql
+│   │   │   ├── fact_orders.sql
+│   │   │   └── fact_daily_sales.sql
+│   │   └── schema.yml
+│   └── tests/
+│       ├── assert_positive_amounts.sql
+│       └── assert_valid_dates.sql
+├── warehouse/
+│   ├── __init__.py
+│   ├── target_schema.sql
+│   └── analytics_queries.sql
+├── extractors/
+│   ├── __init__.py
+│   ├── postgres_extractor.py
+│   ├── mysql_extractor.py
+│   └── mongo_extractor.py
+├── transformers/
+│   ├── __init__.py
+│   └── data_transformer.py
+├── loaders/
+│   ├── __init__.py
+│   └── warehouse_loader.py
+├── tests/
+│   ├── __init__.py
+│   ├── test_extractors.py
+│   ├── test_transformers.py
+│   └── test_pipeline.py
+└── config/
+    └── warehouse_config.yaml
+```
+
+Create ALL directories and empty `__init__.py` files first.
+
+#### Step 1.3 — Create `.gitignore`
+```gitignore
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.log
+.DS_Store
+airflow/logs/
+dbt_warehouse/target/
+dbt_warehouse/dbt_packages/
+```
+
+#### Step 1.4 — Create `requirements.txt`
+```
+apache-airflow==2.8.0
+psycopg2-binary==2.9.9
+pymongo==4.6.1
+pymysql==1.1.0
+sqlalchemy==2.0.23
+faker==22.0.0
+python-dotenv==1.0.0
+pyyaml==6.0.1
+pandas==2.1.4
+numpy==1.26.2
+dbt-core==1.7.3
+dbt-postgres==1.7.3
+```
+
+#### Step 1.5 — Create `.env.example`
+```
+# Source: PostgreSQL (orders)
+PG_SOURCE_HOST=localhost
+PG_SOURCE_PORT=5433
+PG_SOURCE_DB=ecommerce_orders
+PG_SOURCE_USER=source_user
+PG_SOURCE_PASSWORD=source_pass
+
+# Source: MySQL (customers)
+MYSQL_SOURCE_HOST=localhost
+MYSQL_SOURCE_PORT=3307
+MYSQL_SOURCE_DB=customer_management
+MYSQL_SOURCE_USER=source_user
+MYSQL_SOURCE_PASSWORD=source_pass
+
+# Source: MongoDB (product reviews)
+MONGO_SOURCE_HOST=localhost
+MONGO_SOURCE_PORT=27017
+MONGO_SOURCE_DB=product_reviews
+
+# Target: PostgreSQL Warehouse
+WAREHOUSE_HOST=localhost
+WAREHOUSE_PORT=5432
+WAREHOUSE_DB=analytics_warehouse
+WAREHOUSE_USER=warehouse_user
+WAREHOUSE_PASSWORD=warehouse_pass
+```
+
+---
+
+### Phase 2: Docker Infrastructure
+
+#### Step 2.1 — Create `docker-compose.yml`
+Set up 5 containers:
+- **PostgreSQL (source)** — simulates an orders database (port 5433)
+- **MySQL (source)** — simulates a customer management system (port 3307)
+- **MongoDB (source)** — simulates a product reviews collection (port 27017)
+- **PostgreSQL (warehouse target)** — the analytics data warehouse (port 5432)
+- **Airflow** (webserver + scheduler) — orchestrates the ETL (port 8080)
+
+```yaml
+version: '3.8'
+services:
+  # SOURCE: PostgreSQL — Orders database
+  postgres_source:
+    image: postgres:15
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: ecommerce_orders
+      POSTGRES_USER: source_user
+      POSTGRES_PASSWORD: source_pass
+    volumes:
+      - pg_source_data:/var/lib/postgresql/data
+
+  # SOURCE: MySQL — Customer management
+  mysql_source:
+    image: mysql:8.0
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_DATABASE: customer_management
+      MYSQL_USER: source_user
+      MYSQL_PASSWORD: source_pass
+      MYSQL_ROOT_PASSWORD: root_pass
+    volumes:
+      - mysql_source_data:/var/lib/mysql
+
+  # SOURCE: MongoDB — Product reviews
+  mongo_source:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_source_data:/data/db
+
+  # TARGET: PostgreSQL — Analytics warehouse
+  postgres_warehouse:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: analytics_warehouse
+      POSTGRES_USER: warehouse_user
+      POSTGRES_PASSWORD: warehouse_pass
+    volumes:
+      - warehouse_data:/var/lib/postgresql/data
+      - ./warehouse/target_schema.sql:/docker-entrypoint-initdb.d/schema.sql
+
+  # Airflow webserver
+  airflow:
+    image: apache/airflow:2.8.0
+    depends_on:
+      - postgres_warehouse
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - airflow_logs:/opt/airflow/logs
+    command: >
+      bash -c "airflow db init && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com && airflow webserver & airflow scheduler"
+
+volumes:
+  pg_source_data:
+  mysql_source_data:
+  mongo_source_data:
+  warehouse_data:
+  airflow_logs:
+```
+
+#### Step 2.2 — Test infrastructure
+```bash
+docker-compose up -d
+docker-compose ps
+# Verify all 5 containers are running
+```
+
+---
+
+### Phase 3: Source Data Generation
+
+#### Step 3.1 — Create `config/warehouse_config.yaml`
+```yaml
+sources:
+  postgres:
+    table: orders
+    records: 100000
+  mysql:
+    table: customers
+    records: 20000
+  mongodb:
+    collection: product_reviews
+    records: 80000
+
+warehouse:
+  schema: star_schema
+  target_records: 200000
+
+etl:
+  schedule: "0 6 * * *"  # Daily at 6 AM
+  batch_size: 10000
+  retry_count: 3
+```
+
+#### Step 3.2 — Create `source_databases/postgres_source.py`
+Generate and seed the PostgreSQL source with an **orders** table:
+
+```python
+# Schema for orders table:
+# - order_id (UUID, primary key)
+# - customer_id (VARCHAR, FK reference)
+# - product_id (VARCHAR, FK reference)
+# - order_date (TIMESTAMP)
+# - quantity (INTEGER, 1-20)
+# - unit_price (DECIMAL, 5.00-500.00)
+# - total_amount (DECIMAL, computed)
+# - status (VARCHAR: COMPLETED, PENDING, CANCELLED, REFUNDED)
+# - payment_method (VARCHAR: CREDIT_CARD, DEBIT_CARD, PAYPAL, BANK_TRANSFER)
+# - shipping_address (TEXT)
+```
+
+- Use `faker` to generate 100,000 realistic order records
+- Orders span the last 12 months
+- Include realistic distribution (80% completed, 10% pending, 5% cancelled, 5% refunded)
+- Create the table and insert data in batches of 5000
+
+#### Step 3.3 — Create `source_databases/mysql_source.py`
+Generate and seed MySQL with a **customers** table:
+
+```python
+# Schema for customers table:
+# - customer_id (VARCHAR, primary key, format: CUST_XXXXX)
+# - first_name (VARCHAR)
+# - last_name (VARCHAR)
+# - email (VARCHAR, unique)
+# - phone (VARCHAR)
+# - city (VARCHAR)
+# - state (VARCHAR)
+# - country (VARCHAR, default 'US')
+# - signup_date (DATE)
+# - customer_tier (VARCHAR: BRONZE, SILVER, GOLD, PLATINUM)
+# - lifetime_value (DECIMAL)
+# - is_active (BOOLEAN)
+```
+
+- Use `faker` to generate 20,000 customer records
+- Realistic tier distribution (50% bronze, 30% silver, 15% gold, 5% platinum)
+- 85% active, 15% inactive
+
+#### Step 3.4 — Create `source_databases/mongo_source.py`
+Generate and seed MongoDB with a **product_reviews** collection:
+
+```python
+# Document schema for product_reviews:
+# {
+#     "review_id": "UUID string",
+#     "product_id": "PROD_XXXX (1-500 products)",
+#     "customer_id": "CUST_XXXXX (matches MySQL customers)",
+#     "rating": 1-5 integer,
+#     "review_text": "faker paragraph",
+#     "review_date": "ISO datetime",
+#     "verified_purchase": boolean,
+#     "helpful_votes": 0-50 integer,
+#     "product_category": "Electronics/Clothing/Home/Books/Sports"
+# }
+```
+
+- Generate 80,000 review documents
+- Realistic rating distribution (skewed towards 4-5 stars)
+- 70% verified purchases
+
+#### Step 3.5 — Create `source_databases/seed_data.py`
+Master script that seeds ALL three source databases:
+```python
+# Usage: python -m source_databases.seed_data
+# 1. Connect to each source database
+# 2. Create tables/collections
+# 3. Generate and insert data
+# 4. Print summary (records created per source)
+```
+
+---
+
+### Phase 4: Extractors (E in ETL)
+
+#### Step 4.1 — Create `extractors/postgres_extractor.py`
+- Function `extract_orders(connection_params, last_extracted_date=None)`:
+  - Full extract: SELECT all orders
+  - Incremental extract: WHERE order_date > last_extracted_date
+  - Returns a pandas DataFrame
+  - Logs record count extracted
+
+#### Step 4.2 — Create `extractors/mysql_extractor.py`
+- Function `extract_customers(connection_params, last_extracted_date=None)`:
+  - Full extract: SELECT all customers
+  - Incremental extract: WHERE signup_date > last_extracted_date
+  - Returns a pandas DataFrame
+
+#### Step 4.3 — Create `extractors/mongo_extractor.py`
+- Function `extract_reviews(connection_params, last_extracted_date=None)`:
+  - Full extract: find all documents
+  - Incremental extract: filter by review_date > last_extracted_date
+  - Flatten MongoDB documents into a pandas DataFrame
+  - Handle nested fields and ObjectId conversion
+
+---
+
+### Phase 5: Transformers (T in ETL)
+
+#### Step 5.1 — Create `transformers/data_transformer.py`
+Functions to clean and transform extracted data:
+
+- Function `clean_orders(orders_df)`:
+  - Remove duplicates by order_id
+  - Handle null quantities (default to 1)
+  - Recalculate total_amount where missing (quantity × unit_price)
+  - Standardize status values to uppercase
+  - Add `order_month`, `order_year`, `order_day_of_week` columns
+
+- Function `clean_customers(customers_df)`:
+  - Remove duplicates by customer_id
+  - Standardize email to lowercase
+  - Handle null phone numbers (set to 'N/A')
+  - Validate customer_tier values
+  - Add `account_age_days` column
+
+- Function `clean_reviews(reviews_df)`:
+  - Remove duplicates by review_id
+  - Validate rating is 1-5
+  - Handle null review_text (set to empty string)
+  - Parse review_date to consistent datetime format
+  - Add `sentiment_category` based on rating (1-2: negative, 3: neutral, 4-5: positive)
+
+- Function `validate_referential_integrity(orders_df, customers_df)`:
+  - Check that all customer_ids in orders exist in customers
+  - Log orphaned records
+  - Return cleaned version with only valid references
+
+---
+
+### Phase 6: Loaders (L in ETL)
+
+#### Step 6.1 — Create `warehouse/target_schema.sql`
+Star schema design for the analytics warehouse:
+
+```sql
+-- DIMENSION TABLES
+
+CREATE TABLE IF NOT EXISTS dim_customers (
+    customer_key SERIAL PRIMARY KEY,
+    customer_id VARCHAR(20) UNIQUE NOT NULL,
+    first_name VARCHAR(50),
+    last_name VARCHAR(50),
+    email VARCHAR(100),
+    city VARCHAR(50),
+    state VARCHAR(50),
+    country VARCHAR(10) DEFAULT 'US',
+    customer_tier VARCHAR(20),
+    lifetime_value DECIMAL(12,2),
+    is_active BOOLEAN,
+    account_age_days INTEGER,
+    loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS dim_products (
+    product_key SERIAL PRIMARY KEY,
+    product_id VARCHAR(20) UNIQUE NOT NULL,
+    product_category VARCHAR(50),
+    avg_rating DECIMAL(3,2),
+    total_reviews INTEGER,
+    loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS dim_date (
+    date_key INTEGER PRIMARY KEY,  -- YYYYMMDD
+    full_date DATE NOT NULL,
+    day_of_week INTEGER,
+    day_name VARCHAR(10),
+    month INTEGER,
+    month_name VARCHAR(10),
+    quarter INTEGER,
+    year INTEGER,
+    is_weekend BOOLEAN
+);
+
+-- FACT TABLES
+
+CREATE TABLE IF NOT EXISTS fact_orders (
+    order_key SERIAL PRIMARY KEY,
+    order_id VARCHAR(36) UNIQUE NOT NULL,
+    customer_key INTEGER REFERENCES dim_customers(customer_key),
+    product_key INTEGER REFERENCES dim_products(product_key),
+    date_key INTEGER REFERENCES dim_date(date_key),
+    quantity INTEGER,
+    unit_price DECIMAL(10,2),
+    total_amount DECIMAL(12,2),
+    status VARCHAR(20),
+    payment_method VARCHAR(30),
+    loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS fact_daily_sales (
+    date_key INTEGER REFERENCES dim_date(date_key),
+    product_key INTEGER REFERENCES dim_products(product_key),
+    total_revenue DECIMAL(15,2),
+    total_orders INTEGER,
+    avg_order_value DECIMAL(10,2),
+    cancelled_orders INTEGER,
+    refunded_amount DECIMAL(12,2),
+    PRIMARY KEY (date_key, product_key)
+);
+
+-- DATA QUALITY TABLE
+CREATE TABLE IF NOT EXISTS etl_run_log (
+    run_id SERIAL PRIMARY KEY,
+    dag_id VARCHAR(50),
+    run_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    source_name VARCHAR(30),
+    records_extracted INTEGER,
+    records_transformed INTEGER,
+    records_loaded INTEGER,
+    records_rejected INTEGER,
+    status VARCHAR(20),
+    error_message TEXT
+);
+
+-- INDEXES
+CREATE INDEX idx_fact_orders_customer ON fact_orders(customer_key);
+CREATE INDEX idx_fact_orders_date ON fact_orders(date_key);
+CREATE INDEX idx_fact_orders_product ON fact_orders(product_key);
+CREATE INDEX idx_fact_daily_date ON fact_daily_sales(date_key);
+```
+
+#### Step 6.2 — Create `loaders/warehouse_loader.py`
+- Function `load_dimension(df, table_name, key_column, connection_params)`:
+  - Upsert logic: INSERT new records, UPDATE existing ones
+  - Uses `ON CONFLICT (key_column) DO UPDATE`
+  - Returns count of inserts and updates
+- Function `load_fact(df, table_name, connection_params)`:
+  - Bulk insert fact records
+  - Skip duplicates with `ON CONFLICT DO NOTHING`
+- Function `populate_date_dimension(start_date, end_date, connection_params)`:
+  - Generate all dates between start and end
+  - Insert into dim_date with all derived fields
+- Function `log_etl_run(run_details, connection_params)`:
+  - Insert a record into etl_run_log
+
+---
+
+### Phase 7: dbt Models
+
+#### Step 7.1 — Create `dbt_warehouse/dbt_project.yml`
+```yaml
+name: 'etl_data_warehouse'
+version: '1.0.0'
+config-version: 2
+profile: 'warehouse'
+
+model-paths: ["models"]
+test-paths: ["tests"]
+
+models:
+  etl_data_warehouse:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table
+```
+
+#### Step 7.2 — Create `dbt_warehouse/profiles.yml`
+```yaml
+warehouse:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: localhost
+      port: 5432
+      user: warehouse_user
+      pass: warehouse_pass
+      dbname: analytics_warehouse
+      schema: public
+      threads: 4
+```
+
+#### Step 7.3 — Create staging models
+Each staging model is a SQL file that selects from raw/source tables:
+
+**`models/staging/stg_orders.sql`:**
+```sql
+SELECT
+    order_id,
+    customer_id,
+    product_id,
+    order_date,
+    quantity,
+    unit_price,
+    quantity * unit_price AS calculated_total,
+    COALESCE(total_amount, quantity * unit_price) AS total_amount,
+    UPPER(status) AS status,
+    payment_method,
+    EXTRACT(MONTH FROM order_date) AS order_month,
+    EXTRACT(YEAR FROM order_date) AS order_year,
+    EXTRACT(DOW FROM order_date) AS day_of_week
+FROM {{ source('raw', 'raw_orders') }}
+WHERE order_id IS NOT NULL
+```
+
+**`models/staging/stg_customers.sql`:**
+```sql
+SELECT
+    customer_id,
+    first_name,
+    last_name,
+    LOWER(email) AS email,
+    city,
+    state,
+    country,
+    customer_tier,
+    lifetime_value,
+    is_active,
+    signup_date,
+    CURRENT_DATE - signup_date AS account_age_days
+FROM {{ source('raw', 'raw_customers') }}
+WHERE customer_id IS NOT NULL
+```
+
+**`models/staging/stg_products.sql`** and **`models/staging/stg_reviews.sql`:** Follow the same pattern — clean, validate, and derive fields from raw data.
+
+#### Step 7.4 — Create mart models
+**`models/marts/dim_customers.sql`:**
+```sql
+SELECT
+    ROW_NUMBER() OVER (ORDER BY customer_id) AS customer_key,
+    customer_id,
+    first_name,
+    last_name,
+    email,
+    city,
+    state,
+    country,
+    customer_tier,
+    lifetime_value,
+    is_active,
+    account_age_days
+FROM {{ ref('stg_customers') }}
+```
+
+**`models/marts/fact_orders.sql`:**
+```sql
+SELECT
+    o.order_id,
+    c.customer_key,
+    p.product_key,
+    d.date_key,
+    o.quantity,
+    o.unit_price,
+    o.total_amount,
+    o.status,
+    o.payment_method
+FROM {{ ref('stg_orders') }} o
+LEFT JOIN {{ ref('dim_customers') }} c ON o.customer_id = c.customer_id
+LEFT JOIN {{ ref('dim_products') }} p ON o.product_id = p.product_id
+LEFT JOIN dim_date d ON DATE(o.order_date) = d.full_date
+```
+
+Write similarly for `dim_products.sql` and `fact_daily_sales.sql`.
+
+#### Step 7.5 — Create `models/schema.yml`
+Define tests for all models:
+```yaml
+version: 2
+models:
+  - name: stg_orders
+    columns:
+      - name: order_id
+        tests:
+          - unique
+          - not_null
+      - name: total_amount
+        tests:
+          - not_null
+  - name: dim_customers
+    columns:
+      - name: customer_id
+        tests:
+          - unique
+          - not_null
+```
+
+#### Step 7.6 — Create custom dbt tests
+**`tests/assert_positive_amounts.sql`:**
+```sql
+SELECT * FROM {{ ref('fact_orders') }}
+WHERE total_amount < 0
+```
+
+**`tests/assert_valid_dates.sql`:**
+```sql
+SELECT * FROM {{ ref('fact_orders') }}
+WHERE date_key IS NULL OR date_key < 20230101
+```
+
+---
+
+### Phase 8: Airflow DAGs
+
+#### Step 8.1 — Create `airflow/dags/etl_daily_pipeline.py`
+Main DAG that orchestrates the full ETL:
+
+```python
+# DAG Configuration:
+# - dag_id: "etl_daily_pipeline"
+# - schedule: "@daily" (runs at midnight)
+# - start_date: 30 days ago
+# - catchup: False
+# - retries: 2
+# - retry_delay: 5 minutes
+
+# Task Flow (linear dependency):
+# extract_orders >> extract_customers >> extract_reviews >>
+# transform_and_validate >> load_dimensions >> load_facts >>
+# run_dbt_models >> run_quality_checks >> log_completion
+
+# Each task is a PythonOperator that calls the appropriate
+# extractor/transformer/loader function
+
+# Task 1: extract_orders
+# - Calls postgres_extractor.extract_orders()
+# - Pushes DataFrame to XCom (or saves to temp file)
+
+# Task 2: extract_customers
+# - Calls mysql_extractor.extract_customers()
+
+# Task 3: extract_reviews
+# - Calls mongo_extractor.extract_reviews()
+
+# Task 4: transform_and_validate
+# - Pulls all 3 DataFrames
+# - Runs all cleaning functions
+# - Validates referential integrity
+# - Logs rejected records
+
+# Task 5: load_dimensions
+# - Loads dim_customers, dim_products, dim_date
+
+# Task 6: load_facts
+# - Loads fact_orders, fact_daily_sales
+
+# Task 7: run_dbt_models
+# - Runs: dbt run --project-dir dbt_warehouse
+# - Runs: dbt test --project-dir dbt_warehouse
+
+# Task 8: run_quality_checks
+# - Verify record counts match expectations
+# - Check for null keys in fact tables
+# - Verify dimension table completeness
+
+# Task 9: log_completion
+# - Insert run summary into etl_run_log
+```
+
+#### Step 8.2 — Create `airflow/dags/data_quality_check.py`
+Separate DAG for data quality monitoring:
+- Runs daily after the main ETL
+- Checks: null rates per column, duplicate counts, referential integrity violations
+- Logs results to `etl_run_log`
+
+---
+
+### Phase 9: SQL Analytics
+
+#### Step 9.1 — Create `warehouse/analytics_queries.sql`
+Write 5 analytical queries using CTEs and window functions:
+
+```sql
+-- Query 1: Monthly Revenue Trend with Running Total
+-- Uses: CTE, SUM() OVER (ORDER BY month), LAG() for month-over-month change
+
+-- Query 2: Customer Tier Analysis with Percentile Ranking
+-- Uses: JOINs (fact_orders + dim_customers), NTILE(), AVG() OVER (PARTITION BY tier)
+
+-- Query 3: Product Category Performance with Ranking
+-- Uses: CTE, RANK() OVER (PARTITION BY category ORDER BY revenue DESC)
+-- JOINs fact_orders + dim_products
+
+-- Query 4: Customer Retention Cohort Analysis
+-- Uses: Multiple CTEs, DATE_TRUNC, COUNT(DISTINCT), window functions
+-- Groups customers by signup month and tracks retention
+
+-- Query 5: Daily Sales Anomaly Detection
+-- Uses: CTE, AVG() OVER (ROWS BETWEEN 7 PRECEDING AND CURRENT ROW) for moving average
+-- Flags days where sales deviate >2 standard deviations from the 7-day moving average
+```
+
+Write the FULL SQL for all 5 queries. Each should be 15-30 lines and use real column/table names from the star schema.
+
+---
+
+### Phase 10: Tests
+
+#### Step 10.1 — Create `tests/test_extractors.py`
+- Test postgres extractor returns DataFrame with expected columns
+- Test mysql extractor handles connection errors gracefully
+- Test mongo extractor flattens nested documents correctly
+- Test incremental extraction filters by date correctly
+
+#### Step 10.2 — Create `tests/test_transformers.py`
+- Test `clean_orders()` removes duplicates
+- Test `clean_orders()` handles null quantities
+- Test `clean_customers()` lowercases emails
+- Test `validate_referential_integrity()` catches orphaned records
+- Test that cleaned data has no nulls in required fields
+
+#### Step 10.3 — Create `tests/test_pipeline.py`
+- Integration test: extract from all 3 sources → transform → load to warehouse
+- Verify record counts in warehouse match expected
+- Verify star schema relationships (foreign keys)
+
+Run tests with:
+```bash
+python -m pytest tests/ -v
+```
+
+---
+
+### Phase 11: README
+
+#### Step 11.1 — Create `README.md`
+Write a comprehensive README with:
+
+1. **Title and description**
+2. **Architecture diagram** (Mermaid diagram showing: 3 source DBs → Extractors → Transformers → Airflow → dbt → Star Schema Warehouse → Analytics)
+3. **Star Schema Diagram** (Mermaid ER diagram showing dim/fact relationships)
+4. **Tech Stack**
+5. **Project Structure**
+6. **Prerequisites** (Docker, Python 3.9+)
+7. **Quick Start:**
+   ```bash
+   # Clone
+   git clone https://github.com/Ch-Suharsha/etl-data-warehouse.git
+   cd etl-data-warehouse
+
+   # Start all services
+   docker-compose up -d
+
+   # Install dependencies
+   pip install -r requirements.txt
+
+   # Seed source databases with sample data
+   python -m source_databases.seed_data
+
+   # Run the ETL pipeline manually
+   python -m pipeline.run_etl
+
+   # Or trigger via Airflow UI at http://localhost:8080
+   # Login: admin / admin
+
+   # Run dbt models
+   cd dbt_warehouse && dbt run && dbt test
+   ```
+8. **ETL Pipeline Stages** (explain each stage)
+9. **Star Schema Design** (explain dim/fact tables)
+10. **SQL Analytics Examples** (show 2-3 queries with sample output)
+11. **Data Quality** (explain validation and dbt tests)
+
+> [!IMPORTANT]
+> The README should be written in Harsha's tone (professional blog mode, 5-6/10 formality). Use "I built this..." framing, "so that" purpose clauses, and simple verbs. No corporate buzzwords.
+
+---
+
+### Phase 12: Final Steps
+
+#### Step 12.1 — Run everything end-to-end
+```bash
+# Start all containers
+docker-compose up -d
+
+# Seed source databases
+python -m source_databases.seed_data
+
+# Run ETL
+python -m pipeline.run_etl
+
+# Check warehouse has data
+docker exec -it etl-data-warehouse-postgres_warehouse-1 psql -U warehouse_user -d analytics_warehouse -c "SELECT COUNT(*) FROM fact_orders;"
+
+# Run dbt
+cd dbt_warehouse && dbt run && dbt test
+
+# Run tests
+cd .. && python -m pytest tests/ -v
+```
+
+#### Step 12.2 — Commit and push
+```bash
+git add .
+git commit -m "Complete multi-source ETL data warehouse — Airflow, dbt, star schema, SQL analytics"
+git push origin main
+```
+
+#### Step 12.3 — Verify the GitHub repo
+- Go to `https://github.com/Ch-Suharsha/etl-data-warehouse`
+- Confirm README displays correctly
+- Confirm all files are present
+
+---
+
+## Verification Checklist
+
+Before marking this project as done, verify:
+
+- [ ] `docker-compose up -d` starts all 5 services (3 sources + warehouse + Airflow)
+- [ ] `seed_data.py` populates all 3 source databases (100K orders + 20K customers + 80K reviews)
+- [ ] Extractors pull data correctly from all 3 sources
+- [ ] Transformers clean and validate data (duplicates removed, nulls handled)
+- [ ] Referential integrity check catches orphaned records
+- [ ] Warehouse star schema is created correctly (3 dims + 2 facts + date dim)
+- [ ] Loader upserts dimensions and bulk-inserts facts
+- [ ] Airflow DAG runs successfully end-to-end
+- [ ] dbt models run without errors (`dbt run`)
+- [ ] dbt tests pass (`dbt test`)
+- [ ] All 5 SQL analytics queries run and return results
+- [ ] `etl_run_log` table has entries
+- [ ] All pytest tests pass
+- [ ] README is comprehensive and in Harsha's tone
+- [ ] Repo is public on GitHub with correct description

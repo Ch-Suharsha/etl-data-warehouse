@@ -1,0 +1,12 @@
+apache-airflow==2.8.0
+psycopg2-binary==2.9.9
+pymongo==4.6.1
+pymysql==1.1.0
+sqlalchemy==2.0.23
+faker==22.0.0
+python-dotenv==1.0.0
+pyyaml==6.0.1
+pandas==2.1.4
+numpy==1.26.2
+dbt-core==1.7.3
+dbt-postgres==1.7.3
